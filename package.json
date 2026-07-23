@@ -1,0 +1,41 @@
+{
+  "name": "smartthings-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server that lets AI agents control Samsung SmartThings devices via the SmartThings API",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "smartthings-mcp": "dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "smartthings",
+    "samsung",
+    "home-automation",
+    "iot",
+    "nanoclaw"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "express": "^5.0.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
