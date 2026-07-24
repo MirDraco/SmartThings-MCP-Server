@@ -1,7 +1,22 @@
 /**
- * Minimal SmartThings REST API client.
- * Docs: https://developer.smartthings.com/docs/api/public
+ * SmartThings client implemented as a bridge over the official SmartThings CLI.
+ *
+ * Why the CLI instead of raw REST + PAT?
+ * - PATs expire after 24h and cannot be auto-renewed.
+ * - The CLI stores an OAuth access token + refresh token and transparently
+ *   refreshes the access token when it expires. By shelling out to the CLI we
+ *   inherit that automatic, unattended token renewal for free.
+ *
+ * Requirements at runtime:
+ * - The `smartthings` CLI must be on PATH.
+ * - A valid credentials file must exist (mounted into the container) at the
+ *   CLI's config dir, e.g. ~/.config/@smartthings/cli/credentials.json
  */
+
+import { execFile } from "node:child_process";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export interface Device {
   deviceId: string;
@@ -46,8 +61,8 @@ export interface Command {
 export class SmartThingsError extends Error {
   constructor(
     message: string,
-    public readonly status: number,
-    public readonly body: string,
+    public readonly exitCode: number | null,
+    public readonly stderr: string,
   ) {
     super(message);
     this.name = "SmartThingsError";
@@ -56,86 +71,103 @@ export class SmartThingsError extends Error {
 
 export class SmartThingsClient {
   constructor(
-    private readonly token: string,
-    private readonly apiBase: string,
+    private readonly cliPath: string = "smartthings",
+    /** Extra env for the CLI process (e.g. SMARTTHINGS_CLI_CONFIG_DIR). */
+    private readonly env: NodeJS.ProcessEnv = {},
   ) {}
 
-  private async request<T>(
-    path: string,
-    init: RequestInit = {},
-  ): Promise<T> {
-    const url = `${this.apiBase}${path}`;
-    const res = await fetch(url, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        ...(init.headers ?? {}),
-      },
-    });
-
-    const text = await res.text();
-    if (!res.ok) {
-      throw new SmartThingsError(
-        `SmartThings API ${res.status} ${res.statusText} for ${init.method ?? "GET"} ${path}`,
-        res.status,
-        text,
+  /** Run the CLI and return stdout. Throws SmartThingsError on non-zero exit. */
+  private run(args: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      execFile(
+        this.cliPath,
+        args,
+        {
+          env: { ...process.env, ...this.env },
+          maxBuffer: 10 * 1024 * 1024,
+          windowsHide: true,
+        },
+        (error, stdout, stderr) => {
+          if (error) {
+            reject(
+              new SmartThingsError(
+                `smartthings ${args.join(" ")} failed: ${error.message}`,
+                typeof error.code === "number" ? error.code : null,
+                stderr,
+              ),
+            );
+            return;
+          }
+          resolve(stdout);
+        },
       );
-    }
+    });
+  }
 
-    if (!text) {
-      return undefined as T;
-    }
-    return JSON.parse(text) as T;
+  /** Run the CLI expecting JSON output (adds -j). */
+  private async runJson<T>(args: string[]): Promise<T> {
+    const out = await this.run([...args, "-j"]);
+    const trimmed = out.trim();
+    if (!trimmed) return undefined as T;
+    return JSON.parse(trimmed) as T;
   }
 
   async listDevices(locationId?: string): Promise<Device[]> {
-    const query = locationId ? `?locationId=${encodeURIComponent(locationId)}` : "";
-    const data = await this.request<{ items: Device[] }>(`/devices${query}`);
-    return data.items ?? [];
+    const args = ["devices"];
+    if (locationId) args.push("--location", locationId);
+    const data = await this.runJson<Device[]>(args);
+    return Array.isArray(data) ? data : [];
   }
 
   async getDevice(deviceId: string): Promise<Device> {
-    return this.request<Device>(`/devices/${encodeURIComponent(deviceId)}`);
+    return this.runJson<Device>(["devices", deviceId]);
   }
 
   async getDeviceStatus(deviceId: string): Promise<unknown> {
-    return this.request<unknown>(`/devices/${encodeURIComponent(deviceId)}/status`);
+    return this.runJson<unknown>(["devices:status", deviceId]);
   }
 
-  async executeCommands(deviceId: string, commands: Command[]): Promise<unknown> {
-    return this.request<unknown>(
-      `/devices/${encodeURIComponent(deviceId)}/commands`,
-      {
-        method: "POST",
-        body: JSON.stringify({ commands }),
-      },
-    );
+  /**
+   * Execute one or more commands on a device.
+   * Commands are passed to the CLI as a JSON input file (-i) to support
+   * arbitrary arguments (numbers, strings, objects) without shell-quoting.
+   */
+  async executeCommands(deviceId: string, commands: Command[]): Promise<void> {
+    const normalized = commands.map((c) => ({
+      component: c.component ?? "main",
+      capability: c.capability,
+      command: c.command,
+      arguments: c.arguments ?? [],
+    }));
+
+    const dir = await mkdtemp(join(tmpdir(), "st-cmd-"));
+    const file = join(dir, "commands.json");
+    try {
+      await writeFile(file, JSON.stringify({ commands: normalized }), "utf8");
+      await this.run(["devices:commands", deviceId, "-i", file]);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   async listLocations(): Promise<Location[]> {
-    const data = await this.request<{ items: Location[] }>(`/locations`);
-    return data.items ?? [];
+    const data = await this.runJson<Location[]>(["locations"]);
+    return Array.isArray(data) ? data : [];
   }
 
   async listRooms(locationId: string): Promise<Room[]> {
-    const data = await this.request<{ items: Room[] }>(
-      `/locations/${encodeURIComponent(locationId)}/rooms`,
-    );
-    return data.items ?? [];
+    const data = await this.runJson<Room[]>(["locations:rooms", locationId]);
+    return Array.isArray(data) ? data : [];
   }
 
   async listScenes(locationId?: string): Promise<Scene[]> {
-    const query = locationId ? `?locationId=${encodeURIComponent(locationId)}` : "";
-    const data = await this.request<{ items: Scene[] }>(`/scenes${query}`);
-    return data.items ?? [];
+    const args = ["scenes"];
+    if (locationId) args.push("--location", locationId);
+    const data = await this.runJson<Scene[]>(args);
+    return Array.isArray(data) ? data : [];
   }
 
-  async executeScene(sceneId: string): Promise<unknown> {
-    return this.request<unknown>(
-      `/scenes/${encodeURIComponent(sceneId)}/execute`,
-      { method: "POST" },
-    );
+  async executeScene(sceneId: string): Promise<void> {
+    await this.run(["scenes:execute", sceneId]);
   }
 }

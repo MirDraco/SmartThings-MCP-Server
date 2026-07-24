@@ -19,7 +19,7 @@ function toError(err: unknown): {
 } {
   let message: string;
   if (err instanceof SmartThingsError) {
-    message = `SmartThings API error (${err.status}): ${err.message}\n${err.body}`;
+    message = `SmartThings CLI error (exit ${err.exitCode ?? "?"}): ${err.message}\n${err.stderr}`;
   } else if (err instanceof Error) {
     message = err.message;
   } else {

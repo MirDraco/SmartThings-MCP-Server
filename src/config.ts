@@ -1,21 +1,12 @@
 export interface Config {
-  token: string;
-  apiBase: string;
+  /** Path to the SmartThings CLI executable. */
+  cliPath: string;
+  /** Optional override for the CLI config/credentials directory. */
+  cliConfigDir: string | null;
   transport: "stdio" | "http";
   httpHost: string;
   httpPort: number;
   httpAuthToken: string | null;
-}
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value || value.trim() === "") {
-    throw new Error(
-      `Missing required environment variable: ${name}. ` +
-        `See .env.example for configuration details.`,
-    );
-  }
-  return value.trim();
 }
 
 export function loadConfig(): Config {
@@ -27,10 +18,11 @@ export function loadConfig(): Config {
   }
 
   const httpAuthToken = process.env.MCP_HTTP_AUTH_TOKEN?.trim();
+  const cliConfigDir = process.env.SMARTTHINGS_CLI_CONFIG_DIR?.trim();
 
   return {
-    token: requireEnv("SMARTTHINGS_TOKEN"),
-    apiBase: (process.env.SMARTTHINGS_API_BASE ?? "https://api.smartthings.com/v1").trim(),
+    cliPath: (process.env.SMARTTHINGS_CLI_PATH ?? "smartthings").trim(),
+    cliConfigDir: cliConfigDir && cliConfigDir !== "" ? cliConfigDir : null,
     transport,
     httpHost: (process.env.MCP_HTTP_HOST ?? "0.0.0.0").trim(),
     httpPort: Number(process.env.MCP_HTTP_PORT ?? "3000"),

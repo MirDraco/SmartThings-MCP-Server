@@ -111,7 +111,10 @@ async function runHttp(
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const client = new SmartThingsClient(config.token, config.apiBase);
+  const cliEnv = config.cliConfigDir
+    ? { SMARTTHINGS_CLI_CONFIG_DIR: config.cliConfigDir }
+    : {};
+  const client = new SmartThingsClient(config.cliPath, cliEnv);
 
   if (config.transport === "http") {
     await runHttp(client, config.httpHost, config.httpPort, config.httpAuthToken);
